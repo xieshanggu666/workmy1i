@@ -147,6 +147,19 @@ FG.Buildings = (() => {
   const list = () => Object.values(DEFS);
   const byCat = (cat) => Object.values(DEFS).filter(b => b.cat === cat);
 
+  // 原地升级链：低级 → 高级（同级配方组一致，配方/库存可直接保留）
+  const UPGRADE_CHAINS = [
+    ['belt', 'fastBelt', 'expressBelt'],   // 传送带 → 快速 → 极速
+    ['inserter', 'fastInserter'],          // 机械臂 → 快速机械臂
+    ['furnace', 'steelFurnace'],           // 石炉 → 钢炉
+    ['assembler', 'assembler2'],           // 组装机 → 二级组装机
+  ];
+  const CHAIN_OF = (() => {
+    const m = {};
+    UPGRADE_CHAINS.forEach(ch => ch.forEach(t => { m[t] = ch; }));
+    return m;
+  })();
+
   const CATS = [
     { id: 'extraction', name: '采集' },
     { id: 'production', name: '生产' },
@@ -154,5 +167,28 @@ FG.Buildings = (() => {
     { id: 'science',    name: '科研' },
   ];
 
-  return { DEFS, byId, costOf, list, byCat, CATS };
+  /** type 所属升级链（无则 null） */
+  const upgradeChainOf = (type) => CHAIN_OF[type] || null;
+
+  /**
+   * 当前科技下 type 可升级到的最高档目标 id（只考虑同链更高档；无更高档或高档
+   * 全部未解锁 → null）。可传 unlocked(type)=>bool 自定义解锁判定，
+   * 缺省视为全部解锁（纯数据查询）。
+   */
+  const upgradeTargetOf = (type, unlocked) => {
+    const ch = CHAIN_OF[type];
+    if (!ch) return null;
+    const isUnlocked = unlocked || (() => true);
+    const i0 = ch.indexOf(type);
+    let target = null;
+    for (let i = i0 + 1; i < ch.length; i++) {   // 只看更高档，取已解锁的最高档
+      if (isUnlocked(ch[i])) target = ch[i];
+    }
+    return target;
+  };
+
+  return {
+    DEFS, byId, costOf, list, byCat, CATS,
+    UPGRADE_CHAINS, upgradeChainOf, upgradeTargetOf,
+  };
 })();

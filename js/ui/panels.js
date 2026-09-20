@@ -502,7 +502,7 @@ FG.Panels = (() => {
       if (!head) head = p.entries.find(e => e.state === 'wait') || null;
       const st = planStatus(p);
       h += `<div class="bp-plan${p.paused ? ' is-paused' : ''}">
-        <div class="bp-head"><span title="${p.id}">${p.name}</span><span class="plan-st ${st.cls}">${st.txt}</span></div>
+        <div class="bp-head"><span title="${p.id}">${p.upgrade ? '⬆ ' : ''}${p.name}</span><span class="plan-st ${st.cls}">${st.txt}</span></div>
         <div class="progress-bar"><div class="fill" style="width:${(done / total * 100).toFixed(1)}%"></div></div>
         <div style="font-size:11px;color:var(--text-dim)">进度 ${done}/${total} 栋${skipped ? ' · 跳过 ' + skipped : ''}</div>`;
 
@@ -535,8 +535,16 @@ FG.Panels = (() => {
         const cost = FG.Buildings.costOf(head.type);
         const parts = Object.keys(cost).map(k =>
           `${FG.Items.byId(k).name} ${Math.min(head.stock[k] || 0, cost[k])}/${cost[k]}`);
-        h += `<div style="font-size:11px;color:var(--text-dim);margin-top:3px">待建：${def.name}（${head.x},${head.y}）${parts.length ? ' · ' + parts.join(' · ') : ''}</div>`;
-        if (!p.paused && !p.blocked && p.waiting) {
+        if (head.upgrade) {
+          h += `<div style="font-size:11px;color:var(--text-dim);margin-top:3px">待切换：<b style="color:#7be08a">`
+            + `${FG.Buildings.byId(head.upgrade.from).name} → ${def.name}</b>（${head.x},${head.y}）`
+            + (parts.length ? ' · ' + parts.join(' · ') : '') + `</div>`;
+        } else {
+          h += `<div style="font-size:11px;color:var(--text-dim);margin-top:3px">待建：${def.name}（${head.x},${head.y}）${parts.length ? ' · ' + parts.join(' · ') : ''}</div>`;
+        }
+        if (p.upgrade) {
+          h += `<div style="font-size:10px;color:var(--text-dim);margin-top:2px">切换前原建筑继续生产；换型保留配方/库存/在途物料</div>`;
+        } else if (!p.paused && !p.blocked && p.waiting) {
           h += `<div style="font-size:10px;color:var(--text-dim);margin-top:2px">前沿缺料：后续能凑齐建材的建筑会先行建成</div>`;
         }
         if (p.blocked) {

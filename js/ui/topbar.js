@@ -15,12 +15,18 @@ FG.Topbar = (() => {
     document.getElementById('btn-tech').onclick = () => FG.Tech.open();
     document.getElementById('btn-menu').onclick = () => FG.Modals.menu();
     document.getElementById('btn-blueprint').onclick = () => FG.game.toggleBlueprintMode();
+    document.getElementById('btn-upgrade').onclick = () => {
+      if (FG.game.state !== 'playing') return;
+      if (FG.game.bpMode === 'upgrade') FG.game.exitBlueprintMode();
+      else FG.game.enterUpgradeMode();
+    };
     document.getElementById('btn-pipeline').onclick = () => {
       if (FG.game.state === 'playing') FG.Modals.pipelines();
     };
 
     FG.Events.on('blueprint:mode', (m) => {
-      document.getElementById('btn-blueprint').classList.toggle('active', !!m);
+      document.getElementById('btn-blueprint').classList.toggle('active', m === 'select' || m === 'place');
+      document.getElementById('btn-upgrade').classList.toggle('active', m === 'upgrade');
       document.getElementById('btn-pipeline').classList.toggle('active', !!FG.game.pipelineId);
       updateBpHint();
     });
@@ -55,6 +61,12 @@ FG.Topbar = (() => {
     if (!el || game.state !== 'playing' || !game.bpMode) { if (el) el.classList.add('hidden'); return; }
     if (game.bpMode === 'select') {
       el.innerHTML = '📐 <b>框选产线</b>：按住左键拖出矩形区域，框住已有建筑生成蓝图';
+    } else if (game.bpMode === 'upgrade') {
+      const up = game.scanUpgradeSelection ? game.scanUpgradeSelection() : null;
+      const n = up ? up.entries.length : 0;
+      el.innerHTML = '⬆ <b>原地升级</b>：按住左键框选产线，可升级建筑显示为'
+        + '<span style="color:#7be08a">绿色</span>（已解锁高档），松手即提交批量换型施工计划'
+        + (n ? `　<b>${n} 栋待升级</b>` : '　<span style="color:var(--text-dim)">传送带/机械臂/熔炉/组装机</span>');
     } else if (game.pipelineId) {
       const p = FG.Pipelines.byId(game.pipelineId);
       const n = game.blueprint ? game.blueprint.entries.length : 0;

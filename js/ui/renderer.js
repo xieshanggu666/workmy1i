@@ -648,7 +648,11 @@ FG.Renderer = (() => {
   }
 
   // ==================== 蓝图施工 ====================
-  /** 施工计划：待建建筑虚线轮廓（当前待建高亮；缺料橙 / 暂停灰 / 等待前置紫 / 施工蓝） */
+  /**
+   * 施工计划可视化：
+   *  - 普通待建：空格上画目标建筑虚线虚影（当前前沿高亮；缺料橙 / 暂停灰 / 等待前置紫 / 施工蓝）；
+   *  - 原地升级：旧建筑仍在运行（正常绘制），格上叠加目标高档的半透明虚影 + ▲ 角标。
+   */
   function drawConstruction() {
     const cons = game.construction;
     if (!cons || !cons.plans.length) return;
@@ -665,14 +669,29 @@ FG.Renderer = (() => {
         if (e.state !== 'wait') continue;
         const px = e.x * t, py = e.y * t;
         const isCur = e === headEntry(p);
-        ctx.globalAlpha = isCur ? 0.5 : 0.28;
-        ctx.drawImage(buildingIcon(e.type, 32, e.dir), px, py, t, t);
-        ctx.globalAlpha = 1;
-        ctx.strokeStyle = isCur ? color : colorDim;
-        ctx.lineWidth = isCur ? 2 : 1;
-        ctx.setLineDash(p.paused ? [2, 3] : [4, 3]);
-        ctx.strokeRect(px + 1.5, py + 1.5, t - 3, t - 3);
-        ctx.setLineDash([]);
+        if (e.upgrade) {
+          // 原地升级：目标高档建筑虚影覆盖在运行中的旧建筑上
+          ctx.globalAlpha = isCur ? 0.55 : 0.32;
+          ctx.drawImage(buildingIcon(e.type, 32, e.dir), px, py, t, t);
+          ctx.globalAlpha = 1;
+          ctx.strokeStyle = isCur ? '#58c26f' : 'rgba(88,194,111,0.5)';
+          ctx.lineWidth = isCur ? 2 : 1;
+          ctx.setLineDash(p.paused ? [2, 3] : [5, 3]);
+          ctx.strokeRect(px + 1.5, py + 1.5, t - 3, t - 3);
+          ctx.setLineDash([]);
+          ctx.fillStyle = p.paused ? 'rgba(139,147,168,0.9)' : '#7be08a';
+          ctx.font = 'bold 9px sans-serif';
+          ctx.fillText('▲', px + 2, py + 10);
+        } else {
+          ctx.globalAlpha = isCur ? 0.5 : 0.28;
+          ctx.drawImage(buildingIcon(e.type, 32, e.dir), px, py, t, t);
+          ctx.globalAlpha = 1;
+          ctx.strokeStyle = isCur ? color : colorDim;
+          ctx.lineWidth = isCur ? 2 : 1;
+          ctx.setLineDash(p.paused ? [2, 3] : [4, 3]);
+          ctx.strokeRect(px + 1.5, py + 1.5, t - 3, t - 3);
+          ctx.setLineDash([]);
+        }
       }
     }
   }
@@ -685,20 +704,53 @@ FG.Renderer = (() => {
     return null;
   }
 
-  /** 蓝图框选：拖拽矩形 */
+  /** 蓝图框选：拖拽矩形（普通框选=蓝；原地升级=绿，并逐格标出可升级建筑） */
   function drawBlueprintSelect() {
     const r = game.bpSelect;
-    if (!r || game.bpMode !== 'select') return;
+    if (!r || (game.bpMode !== 'select' && game.bpMode !== 'upgrade')) return;
     const t = T();
     const x = Math.min(r.x0, r.x1) * t, y = Math.min(r.y0, r.y1) * t;
     const w = (Math.abs(r.x1 - r.x0) + 1) * t, h = (Math.abs(r.y1 - r.y0) + 1) * t;
-    ctx.fillStyle = 'rgba(77,163,255,0.12)';
+    const upgrade = game.bpMode === 'upgrade';
+    ctx.fillStyle = upgrade ? 'rgba(88,194,111,0.12)' : 'rgba(77,163,255,0.12)';
     ctx.fillRect(x, y, w, h);
-    ctx.strokeStyle = '#4da3ff';
+    ctx.strokeStyle = upgrade ? '#58c26f' : '#4da3ff';
     ctx.lineWidth = 1.5;
     ctx.setLineDash([6, 4]);
     ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
     ctx.setLineDash([]);
+    if (!upgrade) return;
+    // 逐格标注：可升级=绿（画目标建筑虚影 + ⬆），无升级/已排产=暗灰
+    const minX = Math.min(r.x0, r.x1), maxX = Math.max(r.x0, r.x1);
+    const minY = Math.min(r.y0, r.y1), maxY = Math.max(r.y0, r.y1);
+    for (let yy = minY; yy <= maxY; yy++) {
+      for (let xx = minX; xx <= maxX; xx++) {
+        const b = game.map.buildingAt(xx, yy);
+        if (!b) continue;
+        const target = FG.Blueprint.upgradeTargetFor(game, b);
+        const px = xx * t, py = yy * t;
+        if (target
+            && !(game.construction && game.construction.entryAt(xx, yy))) {
+          ctx.globalAlpha = 0.5;
+          ctx.drawImage(buildingIcon(target, 32, b.dir || 0), px, py, t, t);
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = 'rgba(88,194,111,0.22)';
+          ctx.fillRect(px, py, t, t);
+          ctx.strokeStyle = '#58c26f';
+          ctx.lineWidth = 1.6;
+          ctx.strokeRect(px + 0.5, py + 0.5, t - 1, t - 1);
+          ctx.fillStyle = '#9be8a8';
+          ctx.font = 'bold 9px sans-serif';
+          ctx.fillText('▲', px + 2, py + 10);
+        } else {
+          ctx.fillStyle = 'rgba(139,147,168,0.12)';
+          ctx.fillRect(px, py, t, t);
+          ctx.strokeStyle = 'rgba(139,147,168,0.35)';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(px + 0.5, py + 0.5, t - 1, t - 1);
+        }
+      }
+    }
   }
 
   /** 蓝图放置预览：逐格绿/红校验着色，R 旋转后实时刷新；一键流水线支持智能选位原点 */

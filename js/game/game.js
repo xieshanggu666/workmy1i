@@ -21,7 +21,7 @@ FG.Game = class Game {
     this.showStatus = false;      // 状态高亮开关
     // 蓝图施工
     this.construction = new FG.Construction(this); // 施工计划管理器
-    this.bpMode = null;           // 蓝图模式：null | 'select'(框选) | 'place'(放置预览)
+    this.bpMode = null;           // 蓝图模式：null | 'select'(框选) | 'place'(放置预览) | 'upgrade'(原地升级框选)
     this.blueprint = null;        // 当前蓝图（剪贴板）：{w,h,entries}
     this.bpSelect = null;         // 框选拖拽矩形 {x0,y0,x1,y1}
     this.pipelineId = null;       // 当前蓝图来自哪个一键流水线预设（null=普通框选蓝图）
@@ -427,7 +427,7 @@ FG.Game = class Game {
   }
 
   // ================= 蓝图施工 =================
-  /** 切换蓝图模式：无 → 有剪贴板则放置、否则框选；放置 → 框选；框选 → 退出 */
+  /** 切换蓝图模式：无 → 有剪贴板则放置、否则框选；放置 → 框选；其他 → 退出 */
   toggleBlueprintMode() {
     if (this.state !== 'playing') return;
     if (!this.bpMode) {
@@ -438,7 +438,7 @@ FG.Game = class Game {
     } else if (this.bpMode === 'place') {
       this.bpMode = 'select';   // 已有蓝图时按 B 可重新框选
     } else {
-      this.bpMode = null;
+      this.bpMode = null;       // select / upgrade → 退出
     }
     this.bpSelect = null;
     FG.Events.emit('blueprint:mode', this.bpMode);
@@ -482,6 +482,58 @@ FG.Game = class Game {
     this.blueprint = FG.Blueprint.rotate(this.blueprint);
     this.bpAnchor = null;
     FG.Events.emit('blueprint:change');
+  }
+
+  // ================= 蓝图原地升级 =================
+  /** 进入「原地升级」框选模式：框住产线批量换型为已解锁高档建筑 */
+  enterUpgradeMode() {
+    if (this.state !== 'playing') return;
+    this.cancelGhost();
+    this.selection = null;
+    FG.Events.emit('selection:change');
+    this.bpMode = 'upgrade';
+    this.bpSelect = null;
+    FG.Events.emit('blueprint:mode', 'upgrade');
+  }
+
+  /** 实时扫描框选矩形内的可升级建筑（渲染高亮用，不产生计划） */
+  scanUpgradeSelection() {
+    const r = this.bpSelect;
+    if (this.bpMode !== 'upgrade' || !r) return null;
+    return FG.Blueprint.scanUpgrades(this, r.x0, r.y0, r.x1, r.y1);
+  }
+
+  /**
+   * 提交原地升级计划：扫描框内可升级建筑 → 逐栋生成升级条目（成本=高档建筑建材）。
+   * 旧建筑在各自条目备料完成前继续生产，按施工节奏分步切换，配方/库存/在途物料保留。
+   */
+  submitUpgradeSelection(x0, y0, x1, y1) {
+    if (this.state !== 'playing') return 0;
+    const w = Math.abs(x1 - x0) + 1, h = Math.abs(y1 - y0) + 1;
+    if (w * h > FG.Config.BP_MAX_AREA) {
+      this.logMsg('框选区域过大（' + w + '×' + h + '），上限 ' + FG.Config.BP_MAX_AREA + ' 格', 'error');
+      return 0;
+    }
+    const up = FG.Blueprint.scanUpgrades(this, x0, y0, x1, y1);
+    if (!up.entries.length) {
+      this.logMsg('框选区域内没有可升级的建筑（需已解锁更高等级：传送带/机械臂/熔炉/组装机）', 'error');
+      return 0;
+    }
+    const minX = Math.min(x0, x1), minY = Math.min(y0, y1);
+    const plan = this.construction.addPlan(up, minX, minY, { upgrade: true });
+    // 更易读的计划名：汇总换型去向
+    const targets = {};
+    for (const e of up.entries) targets[e.type] = (targets[e.type] || 0) + 1;
+    plan.name = '升级→' + Object.keys(targets)
+      .map(t => FG.Buildings.byId(t).name + '×' + targets[t]).join('、');
+    const cost = FG.Blueprint.upgradeCostOf(up);
+    const costTxt = Object.keys(cost).map(k => FG.Items.byId(k).name + '×' + cost[k]).join('、');
+    this.logMsg('⬆ 已提交原地升级计划：' + up.entries.length + ' 栋建筑分步换型（建材：'
+      + costTxt + '）；切换前原建筑继续生产，配方/库存/在途物料全部保留', 'unlock');
+    if (up.skipped) {
+      this.logMsg('框内另有 ' + up.skipped + ' 栋建筑无可用升级或已有施工计划，已自动跳过', 'info');
+    }
+    return up.entries.length;
   }
 
   // ================= 一键流水线 =================

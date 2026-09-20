@@ -5,7 +5,7 @@
 window.FG = window.FG || {};
 
 FG.Config = {
-  VERSION: '1.5.0',
+  VERSION: '1.6.0',
 
   // 仿真节拍：每秒 20 tick
   TPS: 20,

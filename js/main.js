@@ -46,8 +46,9 @@
         FG.game.camera.x -= e.movementX / t;
         FG.game.camera.y -= e.movementY / t;
       }
-      if (bpDrag && FG.game.bpMode === 'select') {
+      if (bpDrag && (FG.game.bpMode === 'select' || FG.game.bpMode === 'upgrade')) {
         FG.game.bpSelect = { x0: bpDrag.x, y0: bpDrag.y, x1: tile.x, y1: tile.y };
+        if (bpDrag.mode === 'upgrade') FG.Events.emit('blueprint:change'); // 刷新「N 栋待升级」计数
       }
       // 一键流水线预览：智能选位锁定后，仅当鼠标所在原点本身也可放置时才改为跟随鼠标
       //（含矿机的产线只有鼠标悬停到另一处矿脉才会解锁，避免一开始就丢失自动对准）
@@ -84,9 +85,9 @@
       if (e.button === 0) {
         const game = FG.game;
         game._lastMouseTile = tile;
-        // 蓝图模式：框选 / 提交施工计划
-        if (game.bpMode === 'select') {
-          bpDrag = { x: tile.x, y: tile.y };
+        // 蓝图模式：框选 / 原地升级框选 / 提交施工计划
+        if (game.bpMode === 'select' || game.bpMode === 'upgrade') {
+          bpDrag = { x: tile.x, y: tile.y, mode: game.bpMode };
           game.bpSelect = { x0: tile.x, y0: tile.y, x1: tile.x, y1: tile.y };
           return;
         }
@@ -120,12 +121,15 @@
       if (e.button === 2 || e.button === 1) panning = false;
       if (e.button === 0) {
         dragPlace = null;
-        // 蓝图框选完成：生成蓝图并进入放置预览（拖拽中途退出模式则放弃）
+        // 蓝图框选完成：生成蓝图进入放置预览；升级框选完成：直接提交原地升级计划
         if (bpDrag) {
           const r = FG.game.bpSelect;
+          const mode = bpDrag.mode;
           bpDrag = null;
           FG.game.bpSelect = null;
-          if (r && FG.game.bpMode === 'select') FG.game.captureBlueprint(r.x0, r.y0, r.x1, r.y1);
+          if (!r || FG.game.bpMode !== mode) return;
+          if (mode === 'select') FG.game.captureBlueprint(r.x0, r.y0, r.x1, r.y1);
+          else if (mode === 'upgrade') FG.game.submitUpgradeSelection(r.x0, r.y0, r.x1, r.y1);
         }
       }
     });
@@ -183,6 +187,10 @@
         case 'b': case 'B':
           game.toggleBlueprintMode();
           break;
+        case 'u': case 'U':
+          if (game.bpMode === 'upgrade') game.exitBlueprintMode();
+          else game.enterUpgradeMode();
+          break;
         case 'Delete': case 'Backspace':
           if (game.selection && game.selection.isTrain) game.removeTrainSelection();
           else if (game.selection) game.removeBuilding(game.selection);
@@ -214,7 +222,7 @@
     const tr = !b && game.railway ? game.railway.trainAt(tile.x, tile.y)
       : (game.railway && b && (b.type === 'rail' || b.def.railStation)) ? game.railway.trainAt(tile.x, tile.y) : null;
     const pile = !b ? m.pileAt(tile.x, tile.y) : null;
-    const planEntry = !b && game.construction ? game.construction.entryAt(tile.x, tile.y) : null;
+    const planEntry = game.construction ? game.construction.entryAt(tile.x, tile.y) : null;
     let html = '';
     if (tr) {
       const ST = { moving: '行驶中', docked: '装卸中', waiting: '等站排队', blocked: '堵死/让行', noroute: '断路', paused: '已停运', idle: '待命' };
@@ -265,6 +273,17 @@
         html += `<div class="tt-row">接轨 <b>${near}</b> 侧 · 选中可编组发车</div>`;
       }
       if (b.type === 'miner' && b.oreType) html += `<div class="tt-row">${FG.Items.byId(b.oreType).name} <b>${FG.Utils.fmtNum(m.amountAt(b.x, b.y))}</b></div>`;
+      // 该建筑正处于原地升级计划中（旧建筑仍在运行）
+      if (planEntry && planEntry.entry.upgrade) {
+        const pe = planEntry.entry, pp = planEntry.plan;
+        const cost = FG.Buildings.costOf(pe.type);
+        const parts = Object.keys(cost).map(k =>
+          `${FG.Items.byId(k).name} ${Math.min(pe.stock[k] || 0, cost[k])}/${cost[k]}`);
+        html += `<div class="tt-row" style="margin-top:3px;color:#7be08a">⬆ 待升级：<b>${FG.Buildings.byId(pe.type).name}</b>`
+          + (pp.paused ? '（计划已暂停）' : pe.state === 'wait' && pp.waiting ? '（备料中）' : '（待切换）')
+          + `</div>`;
+        if (parts.length) html += `<div class="tt-row">建材：${parts.join(' · ')}</div>`;
+      }
     } else if (pile) {
       html += `<div class="tt-title">地面物料</div>`;
       for (const s of pile.slice(0, 6)) html += `<div class="tt-row">${FG.Items.byId(s.type).name} <b>×${FG.Utils.fmtNum(s.count)}</b></div>`;
