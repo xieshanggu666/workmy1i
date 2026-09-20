@@ -15,6 +15,14 @@
  *    已建成建筑保留；前置计划被取消视为依赖自动满足；
  *  - 预留按条目记账，计划整体序列化（含优先级/依赖/暂停态/条目预留），读档续建；
  *    旧存档的计划级 stock 迁移到前沿条目，无施工字段的旧档回退空计划。
+ *
+ * 原地升级（kind='upgrade'）：
+ *  - 升级计划条目带 from（原建筑类型）：备料成本为新建筑造价，落成时把该格旧建筑
+ *    原地替换为高级型号 —— 配方、槽位库存、流体、传送带在途物品（含预留标签）、
+ *    机械臂手持/筛选/按需、供料优先级全部迁移，在途预留因消费者坐标不变而继续有效；
+ *  - 计划期间原建筑被拆/变更 → 条目跳过并释放预留；该格已是目标型号 → 直接记完成；
+ *  - 暂停/取消与蓝图计划一致：未用预留建材返还物流，已完成的升级保留；
+ *  - 旧存档无 kind/from 字段 → 按普通建造计划处理，行为不变。
  */
 FG.Blueprint = (() => {
 
@@ -147,11 +155,12 @@ FG.Construction = class Construction {
     const plan = {
       id: 'P' + (this.seq++),
       name: '蓝图 ' + bp.w + '×' + bp.h + ' #' + (this.seq - 1),
+      kind: 'build',
       priority: VALID_PRIORITIES[opts.priority] ? opts.priority : 'normal',
       paused: false,
       deps: [],                 // 前置计划 id：全部完工/取消前本计划挂起
       entries: bp.entries.map(e => ({
-        type: e.type, x: ox + e.dx, y: oy + e.dy, dir: e.dir || 0,
+        type: e.type, from: null, x: ox + e.dx, y: oy + e.dy, dir: e.dir || 0,
         recipe: e.recipe || null, filter: e.filter || null,
         demandMode: !!e.demandMode, priority: e.priority || 'normal',
         stationName: e.stationName || null,
@@ -162,6 +171,37 @@ FG.Construction = class Construction {
       timer: 0,
       waiting: false,            // 缺料等待（UI 状态）
       blocked: false,            // 等待前置依赖（UI 状态）
+    };
+    this.plans.push(plan);
+    FG.Events.emit('construction:change');
+    return plan;
+  }
+
+  /**
+   * 提交原地升级计划：list 为 [{from,to,x,y,dir}]（框选产线生成）。
+   * 逐栋按新建筑造价备料，凑齐后原地替换并迁移配方/库存/在途物料。
+   */
+  addUpgradePlan(list, opts) {
+    opts = opts || {};
+    const plan = {
+      id: 'P' + (this.seq++),
+      name: '产线升级 #' + (this.seq - 1),
+      kind: 'upgrade',
+      priority: VALID_PRIORITIES[opts.priority] ? opts.priority : 'normal',
+      paused: false,
+      deps: [],
+      entries: list.map(u => ({
+        type: u.to, from: u.from, x: u.x, y: u.y, dir: u.dir || 0,
+        recipe: null, filter: null,            // 配方/筛选等落成时从旧建筑实时迁移
+        demandMode: false, priority: 'normal',
+        stationName: null,
+        state: 'wait',
+        stock: {},
+      })),
+      cursor: 0,
+      timer: 0,
+      waiting: false,
+      blocked: false,
     };
     this.plans.push(plan);
     FG.Events.emit('construction:change');
@@ -306,6 +346,20 @@ FG.Construction = class Construction {
   }
 
   /**
+   * 条目当前可否落成：
+   *  普通条目：目标格可放置（canPlace）；
+   *  升级条目：该格仍是原型号 → 'ok'；已是目标型号（玩家手动替换过）→ 'done'（不耗料记完成）；
+   *            原建筑被拆/变更 → 'skip'。
+   */
+  checkEntry(e) {
+    if (!e.from) return this.game.canPlace(e.type, e.x, e.y) ? 'ok' : 'skip';
+    const cur = this.game.map.buildingAt(e.x, e.y);
+    if (cur && cur.type === e.type) return 'done';
+    if (!cur || cur.type !== e.from) return 'skip';
+    return 'ok';
+  }
+
+  /**
    * 推进单个计划一轮：
    *  1. 跳过已建成/被占位的条目，推进 cursor；
    *  2. 前沿条目尽量预留缺口建材（可部分预留），凑齐且间隔到期则建成；
@@ -322,11 +376,20 @@ FG.Construction = class Construction {
     while (p.cursor < p.entries.length) {
       const e = p.entries[p.cursor];
       if (e.state !== 'wait') { p.cursor++; continue; }
-      if (!this.game.canPlace(e.type, e.x, e.y)) {
+      const chk = this.checkEntry(e);
+      if (chk === 'done') {   // 升级目标已就位（手动替换）：不耗料直接记完成
+        e.state = 'done';
+        this.releaseEntryStock(e);
+        p.cursor++;
+        progressed = true;
+        continue;
+      }
+      if (chk === 'skip') {
         e.state = 'skip';
         this.releaseEntryStock(e);
         this.game.logMsg('⚠ 「' + p.name + '」跳过 (' + e.x + ',' + e.y + ') '
-          + FG.Buildings.byId(e.type).name + '：位置被占用或地形不符', 'error');
+          + FG.Buildings.byId(e.type).name + '：'
+          + (e.from ? '原建筑已被拆除或变更' : '位置被占用或地形不符'), 'error');
         p.cursor++;
         progressed = true;
         continue;
@@ -347,7 +410,7 @@ FG.Construction = class Construction {
       p.waiting = true;
       for (let i = p.cursor + 1; i < p.entries.length; i++) {
         const e = p.entries[i];
-        if (e.state !== 'wait' || !this.game.canPlace(e.type, e.x, e.y)) continue;
+        if (e.state !== 'wait' || this.checkEntry(e) !== 'ok') continue;
         // 已成套（可能上一 tick 冷却期已预留）或本轮能成套取出，即作为先建目标；
         // all=true 两阶段原子：成套或一件不取，无回滚
         if (this.entryReady(e) || this.pullEntry(e, pool, true)) { target = e; break; }
@@ -411,6 +474,7 @@ FG.Construction = class Construction {
 
   /** 落成一栋建筑：注册进地图与仿真，还原产线配置（配方/筛选/按需/优先级） */
   buildEntry(e) {
+    if (e.from) return this.swapEntry(e);   // 升级条目：原地替换
     const g = this.game;
     const b = FG.Map.create(e.type, e.x, e.y, e.dir);
     if (b.type === 'miner') b.oreType = g.map.oreAt(e.x, e.y);
@@ -433,6 +497,38 @@ FG.Construction = class Construction {
     g.absorbPile(b);     // 回收该格地面物料
     FG.Events.emit('building:placed', b);
     return b;
+  }
+
+  /**
+   * 原地升级替换：旧建筑拆除的同时新建筑同格同向落成，
+   * 配方/库存/在途物料全部迁移（在途预留标签以消费者坐标为键，替换后继续有效）。
+   */
+  swapEntry(e) {
+    const g = this.game;
+    const old = g.map.buildingAt(e.x, e.y);
+    if (!old || old.type !== e.from) return null;   // 调用前 checkEntry 已校验，双保险
+    const nb = FG.Map.create(e.type, e.x, e.y, old.dir);
+    // —— 状态迁移（保留配方、库存与在途物料）——
+    nb.recipe = old.recipe;              // 同配方组（recipeGroup），配方直接兼容
+    nb.progress = old.progress;          // 生产进度不丢
+    nb.slots = old.slots;                // 输入/输出槽库存整体搬迁（含换配方残留料）
+    nb.fluidTanks = old.fluidTanks;      // 流体缓冲罐
+    nb.items = old.items;                // 传送带在途物品（含在途预留标签）
+    nb.rr = old.rr;                      // 合流轮转游标
+    nb.held = old.held;                  // 机械臂手持物品（含预留标签）
+    nb.phase = old.phase; nb.timer = old.timer;
+    nb.filter = old.filter; nb.demandMode = old.demandMode;
+    nb.priority = old.priority;
+    nb.totalCrafted = old.totalCrafted;
+    g.sim.unregister(old);
+    g.map.unregister(old);
+    g.map.register(nb);
+    g.sim.register(nb);                  // 新建筑接入生产调度
+    if (nb.def.recipeBuilding) FG.Map.syncRecipeSlots(nb);
+    if (g.selection === old) g.selection = nb;   // 选中态跟随新建筑
+    g.absorbPile(nb);                    // 回收该格地面物料（如取消返还落在旧建筑脚下的建材）
+    FG.Events.emit('building:placed', nb);
+    return nb;
   }
 
   // ================= 预留释放（暂停 / 挂起依赖 / 取消） =================
@@ -468,7 +564,8 @@ FG.Construction = class Construction {
     this.releaseReserved(p);
     const built = p.entries.filter(e => e.state === 'done').length;
     const skipped = p.entries.filter(e => e.state === 'skip').length;
-    this.game.logMsg('🏗 施工完成「' + p.name + '」：' + built + ' 栋建筑建成并接入生产调度'
+    this.game.logMsg((p.kind === 'upgrade' ? '⬆ 升级完成「' : '🏗 施工完成「') + p.name + '」：'
+      + built + (p.kind === 'upgrade' ? ' 栋建筑已原地替换并接入生产调度' : ' 栋建筑建成并接入生产调度')
       + (skipped ? '，' + skipped + ' 栋被跳过' : ''), 'unlock');
     FG.Events.emit('construction:change');
   }
@@ -481,7 +578,8 @@ FG.Construction = class Construction {
     this.releaseReserved(p);
     const built = p.entries.filter(e => e.state === 'done').length;
     this.plans.splice(i, 1);
-    this.game.logMsg('已取消施工计划「' + p.name + '」：' + built + ' 栋已建成保留，预留建材已返还物流', 'info');
+    this.game.logMsg('已取消' + (p.kind === 'upgrade' ? '升级计划' : '施工计划') + '「' + p.name + '」：'
+      + built + (p.kind === 'upgrade' ? ' 栋已升级保留' : ' 栋已建成保留') + '，未用建材已返还物流', 'info');
     FG.Events.emit('construction:change');
     return true;
   }
@@ -491,11 +589,12 @@ FG.Construction = class Construction {
     return {
       seq: this.seq,
       plans: this.plans.map(p => ({
-        id: p.id, name: p.name, priority: p.priority, paused: !!p.paused,
+        id: p.id, name: p.name, kind: p.kind || 'build',
+        priority: p.priority, paused: !!p.paused,
         deps: (p.deps || []).slice(),
         cursor: p.cursor, timer: p.timer, waiting: p.waiting,
         entries: p.entries.map(e => ({
-          type: e.type, x: e.x, y: e.y, dir: e.dir, recipe: e.recipe,
+          type: e.type, from: e.from || null, x: e.x, y: e.y, dir: e.dir, recipe: e.recipe,
           filter: e.filter, demandMode: e.demandMode, priority: e.priority, state: e.state,
           stationName: e.stationName || null,
           stock: Object.assign({}, e.stock),
@@ -509,7 +608,7 @@ FG.Construction = class Construction {
     this.seq = (data && data.seq) || 1;
     for (const sp of ((data && data.plans) || [])) {
       const entries = (sp.entries || []).map(e => ({
-        type: e.type, x: e.x, y: e.y, dir: e.dir || 0,
+        type: e.type, from: e.from || null, x: e.x, y: e.y, dir: e.dir || 0,
         recipe: e.recipe || null, filter: e.filter || null,
         demandMode: !!e.demandMode, priority: e.priority || 'normal',
         stationName: e.stationName || null,
@@ -519,6 +618,7 @@ FG.Construction = class Construction {
       const plan = {
         id: sp.id || ('P' + (this.seq - 1)),
         name: sp.name || '施工计划',
+        kind: sp.kind === 'upgrade' ? 'upgrade' : 'build',   // 旧存档无 kind → 普通建造
         priority: VALID_PRIORITIES[sp.priority] ? sp.priority : 'normal',
         paused: !!sp.paused,
         deps: Array.isArray(sp.deps) ? sp.deps.slice() : [],

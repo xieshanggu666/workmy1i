@@ -15,6 +15,7 @@ FG.Topbar = (() => {
     document.getElementById('btn-tech').onclick = () => FG.Tech.open();
     document.getElementById('btn-menu').onclick = () => FG.Modals.menu();
     document.getElementById('btn-blueprint').onclick = () => FG.game.toggleBlueprintMode();
+    document.getElementById('btn-upgrade').onclick = () => FG.game.toggleUpgradeMode();
     document.getElementById('btn-pipeline').onclick = () => {
       if (FG.game.state === 'playing') FG.Modals.pipelines();
     };
@@ -25,6 +26,11 @@ FG.Topbar = (() => {
       updateBpHint();
     });
     FG.Events.on('blueprint:change', updateBpHint);
+    FG.Events.on('upgrade:mode', (m) => {
+      document.getElementById('btn-upgrade').classList.toggle('active', !!m);
+      updateBpHint();
+    });
+    FG.Events.on('upgrade:change', updateBpHint);
 
     FG.Events.on('speed:change', (s) => {
       document.querySelectorAll('#speed-btns button').forEach(b =>
@@ -52,8 +58,16 @@ FG.Topbar = (() => {
   function updateBpHint() {
     const el = document.getElementById('bp-hint');
     const game = FG.game;
-    if (!el || game.state !== 'playing' || !game.bpMode) { if (el) el.classList.add('hidden'); return; }
-    if (game.bpMode === 'select') {
+    if (!el || game.state !== 'playing' || (!game.bpMode && !game.upMode)) { if (el) el.classList.add('hidden'); return; }
+    if (game.upMode === 'select') {
+      el.innerHTML = '⬆ <b>原地升级</b>：按住左键框选产线，框内建筑批量替换为<b>已解锁的最高级型号</b>'
+        + '（配方/库存/在途物料保留） · <span class="bh-key">Esc</span> 退出';
+    } else if (game.upMode === 'confirm') {
+      const pv = game.upPreview;
+      const costTxt = pv ? Object.keys(pv.cost).map(k => FG.Items.byId(k).name + '×' + pv.cost[k]).join(' ') : '';
+      el.innerHTML = `⬆ <b>升级预览</b>：${pv ? pv.entries.length : 0} 栋建筑（备料 ${costTxt}）—— `
+        + `<span class="bh-key">左键</span>确认提交施工 · <span class="bh-key">右键</span>/<span class="bh-key">Esc</span> 重选`;
+    } else if (game.bpMode === 'select') {
       el.innerHTML = '📐 <b>框选产线</b>：按住左键拖出矩形区域，框住已有建筑生成蓝图';
     } else if (game.pipelineId) {
       const p = FG.Pipelines.byId(game.pipelineId);

@@ -26,6 +26,10 @@ FG.Game = class Game {
     this.bpSelect = null;         // 框选拖拽矩形 {x0,y0,x1,y1}
     this.pipelineId = null;       // 当前蓝图来自哪个一键流水线预设（null=普通框选蓝图）
     this.bpAnchor = null;         // 一键流水线智能选位原点（F 重新搜索；null=跟随鼠标）
+    // 原地升级
+    this.upMode = null;           // 升级模式：null | 'select'(框选) | 'confirm'(预览待确认)
+    this.upSelect = null;         // 升级框选拖拽矩形 {x0,y0,x1,y1}
+    this.upPreview = null;        // 待确认升级预览 {entries:[{from,to,x,y,dir}], cost:{item:n}}
     this.log = [];
     this.saveInfo = { slot: null, name: '', startDate: Date.now() };
     this.mapInfo = { presetId: 'greenfield', sizeId: 'medium', seed: 1, biome: 'grass' };
@@ -63,6 +67,9 @@ FG.Game = class Game {
     this.bpSelect = null;
     this.pipelineId = null;
     this.bpAnchor = null;
+    this.upMode = null;
+    this.upSelect = null;
+    this.upPreview = null;
     this.saveInfo = { slot: slot || null, name: name || '未命名工厂', startDate: Date.now() };
     this.mapInfo = {
       presetId: gen.presetId, sizeId: gen.sizeId || 'medium',
@@ -264,6 +271,7 @@ FG.Game = class Game {
   // ================= 建筑放置 =================
   setGhost(type) {
     if (!this.research.isBuildingUnlocked(type)) return;
+    this.exitUpgradeMode();
     this.ghost = { type, dir: 0 };
     this.selection = null;
     FG.Events.emit('ghost:change');
@@ -432,6 +440,7 @@ FG.Game = class Game {
     if (this.state !== 'playing') return;
     if (!this.bpMode) {
       this.cancelGhost();
+      this.exitUpgradeMode();
       this.selection = null;
       FG.Events.emit('selection:change');
       this.bpMode = this.blueprint ? 'place' : 'select';
@@ -505,6 +514,7 @@ FG.Game = class Game {
     this.pipelineId = preset.id;
     this.bpAnchor = anchor;   // 找不到则 null：预览跟随鼠标，逐格标红提示
     this.cancelGhost();
+    this.exitUpgradeMode();
     this.selection = null;
     FG.Events.emit('selection:change');
     this.bpMode = 'place';
@@ -572,6 +582,97 @@ FG.Game = class Game {
 
   /** @deprecated 旧名兼容：提交施工计划（新代码请用 submitBlueprintPlanAt） */
   submitBlueprintPlan(ox, oy) { return this.submitBlueprintPlanAt(ox, oy); }
+
+  // ================= 原地升级 =================
+  /** 切换升级模式：进入时退出幽灵/蓝图模式；再按一次退出 */
+  toggleUpgradeMode() {
+    if (this.state !== 'playing') return;
+    if (this.upMode) { this.exitUpgradeMode(); return; }
+    this.cancelGhost();
+    this.exitBlueprintMode();
+    this.selection = null;
+    FG.Events.emit('selection:change');
+    this.upMode = 'select';
+    this.upSelect = null;
+    this.upPreview = null;
+    this.logMsg('⬆ 原地升级：框选产线，框内建筑将批量替换为已解锁的最高级型号', 'info');
+    FG.Events.emit('upgrade:mode', this.upMode);
+  }
+
+  exitUpgradeMode() {
+    if (!this.upMode) return;
+    this.upMode = null;
+    this.upSelect = null;
+    this.upPreview = null;
+    FG.Events.emit('upgrade:mode', null);
+  }
+
+  /**
+   * 框选完成 → 生成升级预览：为每栋建筑找「已解锁的最高级替换型号」，
+   * 跳过无升级链/未解锁/已有施工计划占位的格子；汇总新建筑造价为备料成本。
+   */
+  previewUpgrade(x0, y0, x1, y1) {
+    const minX = Math.min(x0, x1), maxX = Math.max(x0, x1);
+    const minY = Math.min(y0, y1), maxY = Math.max(y0, y1);
+    const entries = [];
+    let locked = 0;
+    for (let y = minY; y <= maxY; y++) {
+      for (let x = minX; x <= maxX; x++) {
+        const b = this.map.buildingAt(x, y);
+        if (!b) continue;
+        const to = FG.Buildings.upgradeTarget(b.type, t => this.research.isBuildingUnlocked(t));
+        if (!to) { if (FG.Buildings.UPGRADE_CHAIN[b.type]) locked++; continue; }
+        if (this.construction.entryAt(x, y)) continue;   // 已有施工/升级计划占位
+        entries.push({ from: b.type, to, x, y, dir: b.dir || 0 });
+      }
+    }
+    this.upSelect = null;
+    if (!entries.length) {
+      this.logMsg(locked
+        ? '框内建筑的高级型号尚未解锁 —— 请先在科技树完成对应研究'
+        : '框选区域内没有可升级的建筑', 'error');
+      FG.Events.emit('upgrade:change');
+      return 0;
+    }
+    const cost = {};
+    for (const e of entries) {
+      const c = FG.Buildings.costOf(e.to);
+      for (const k of Object.keys(c)) cost[k] = (cost[k] || 0) + c[k];
+    }
+    this.upPreview = { entries, cost };
+    this.upMode = 'confirm';
+    const costTxt = Object.keys(cost).map(k => FG.Items.byId(k).name + '×' + cost[k]).join(' ');
+    this.logMsg('⬆ 升级预览：' + entries.length + ' 栋建筑 → 高级型号（备料 ' + costTxt
+      + '）—— 左键确认提交，右键/Esc 重选', 'info');
+    FG.Events.emit('upgrade:mode', 'confirm');
+    FG.Events.emit('upgrade:change');
+    return entries.length;
+  }
+
+  /** 确认预览 → 提交升级施工计划（备料后分步原地切换），并回到框选继续选下一片 */
+  confirmUpgrade() {
+    if (this.upMode !== 'confirm' || !this.upPreview) return false;
+    const plan = this.construction.addUpgradePlan(this.upPreview.entries);
+    this.logMsg('⬆ 已提交升级计划「' + plan.name + '」：' + plan.entries.length
+      + ' 栋建筑将按施工计划备料、分步原地替换（配方/库存/在途物料保留）', 'info');
+    this.upPreview = null;
+    this.upMode = 'select';
+    FG.Events.emit('upgrade:mode', 'select');
+    FG.Events.emit('upgrade:change');
+    return true;
+  }
+
+  /** 右键/Esc：预览中 → 放弃预览回到框选；框选中 → 退出升级模式 */
+  cancelUpgradePreview() {
+    if (this.upMode === 'confirm') {
+      this.upPreview = null;
+      this.upMode = 'select';
+      FG.Events.emit('upgrade:mode', 'select');
+      FG.Events.emit('upgrade:change');
+    } else {
+      this.exitUpgradeMode();
+    }
+  }
 
   setSpeed(s) { this.speed = s; FG.Events.emit('speed:change', s); }
   togglePause() { this.paused = !this.paused; FG.Events.emit('pause:change', this.paused); }

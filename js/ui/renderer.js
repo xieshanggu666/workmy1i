@@ -56,6 +56,7 @@ FG.Renderer = (() => {
     drawConstruction();
     drawBlueprintSelect();
     drawBlueprintGhost();
+    drawUpgrade();
     drawGhost();
 
     ctx.restore();
@@ -648,18 +649,21 @@ FG.Renderer = (() => {
   }
 
   // ==================== 蓝图施工 ====================
-  /** 施工计划：待建建筑虚线轮廓（当前待建高亮；缺料橙 / 暂停灰 / 等待前置紫 / 施工蓝） */
+  /** 施工计划：待建建筑虚线轮廓（当前待建高亮；缺料橙 / 暂停灰 / 等待前置紫 / 施工蓝 / 升级金） */
   function drawConstruction() {
     const cons = game.construction;
     if (!cons || !cons.plans.length) return;
     const t = T();
     for (const p of cons.plans) {
+      const isUp = p.kind === 'upgrade';
       const color = p.paused ? 'rgba(139,147,168,0.85)'
         : p.blocked ? 'rgba(176,140,255,0.9)'
         : p.waiting ? '#e8a33d'
+        : isUp ? '#e8be3d'
         : '#4da3ff';
       const colorDim = p.paused ? 'rgba(139,147,168,0.4)'
         : p.blocked ? 'rgba(176,140,255,0.4)'
+        : isUp ? 'rgba(232,190,61,0.45)'
         : 'rgba(77,163,255,0.45)';
       for (const e of p.entries) {
         if (e.state !== 'wait') continue;
@@ -742,6 +746,48 @@ FG.Renderer = (() => {
       const cxp = (ox + 0.5) * t, cyp = (oy + 0.5) * t;
       ctx.beginPath(); ctx.moveTo(cxp - 6, cyp); ctx.lineTo(cxp + 6, cyp);
       ctx.moveTo(cxp, cyp - 6); ctx.lineTo(cxp, cyp + 6); ctx.stroke();
+    }
+  }
+
+  // ==================== 原地升级 ====================
+  /** 升级框选矩形（金色）与待确认预览：目标型号图标 + 金色虚线框 + 升级箭头 */
+  function drawUpgrade() {
+    if (!game.upMode) return;
+    const t = T();
+    const r = game.upSelect;
+    if (game.upMode === 'select' && r) {
+      const x = Math.min(r.x0, r.x1) * t, y = Math.min(r.y0, r.y1) * t;
+      const w = (Math.abs(r.x1 - r.x0) + 1) * t, h = (Math.abs(r.y1 - r.y0) + 1) * t;
+      ctx.fillStyle = 'rgba(232,190,61,0.10)';
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeStyle = '#e8be3d';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([6, 4]);
+      ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+      ctx.setLineDash([]);
+    }
+    if (game.upMode === 'confirm' && game.upPreview) {
+      for (const e of game.upPreview.entries) {
+        const px = e.x * t, py = e.y * t;
+        ctx.fillStyle = 'rgba(232,190,61,0.16)';
+        ctx.fillRect(px, py, t, t);
+        ctx.globalAlpha = 0.55;
+        ctx.drawImage(buildingIcon(e.to, 32, e.dir), px, py, t, t);
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = '#e8be3d';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 3]);
+        ctx.strokeRect(px + 1, py + 1, t - 2, t - 2);
+        ctx.setLineDash([]);
+        // 右上角升级箭头
+        ctx.fillStyle = '#e8be3d';
+        ctx.beginPath();
+        ctx.moveTo(px + t - 9, py + 8);
+        ctx.lineTo(px + t - 2, py + 8);
+        ctx.lineTo(px + t - 5.5, py + 2);
+        ctx.closePath();
+        ctx.fill();
+      }
     }
   }
 

@@ -11,6 +11,7 @@
   let panning = false;
   let dragPlace = null;      // {lastX, lastY} 传送带拖拽放置
   let bpDrag = null;         // {x, y} 蓝图框选锚点
+  let upDrag = null;         // {x, y} 原地升级框选锚点
 
   // ================= 初始化 =================
   function init() {
@@ -49,6 +50,9 @@
       if (bpDrag && FG.game.bpMode === 'select') {
         FG.game.bpSelect = { x0: bpDrag.x, y0: bpDrag.y, x1: tile.x, y1: tile.y };
       }
+      if (upDrag && FG.game.upMode === 'select') {
+        FG.game.upSelect = { x0: upDrag.x, y0: upDrag.y, x1: tile.x, y1: tile.y };
+      }
       // 一键流水线预览：智能选位锁定后，仅当鼠标所在原点本身也可放置时才改为跟随鼠标
       //（含矿机的产线只有鼠标悬停到另一处矿脉才会解锁，避免一开始就丢失自动对准）
       if (FG.game.bpMode === 'place' && FG.game.pipelineId && FG.game.bpAnchor) {
@@ -84,6 +88,16 @@
       if (e.button === 0) {
         const game = FG.game;
         game._lastMouseTile = tile;
+        // 原地升级：框选 / 确认提交升级计划
+        if (game.upMode === 'select') {
+          upDrag = { x: tile.x, y: tile.y };
+          game.upSelect = { x0: tile.x, y0: tile.y, x1: tile.x, y1: tile.y };
+          return;
+        }
+        if (game.upMode === 'confirm') {
+          game.confirmUpgrade();
+          return;
+        }
         // 蓝图模式：框选 / 提交施工计划
         if (game.bpMode === 'select') {
           bpDrag = { x: tile.x, y: tile.y };
@@ -120,6 +134,13 @@
       if (e.button === 2 || e.button === 1) panning = false;
       if (e.button === 0) {
         dragPlace = null;
+        // 升级框选完成：生成升级预览（拖拽中途退出模式则放弃）
+        if (upDrag) {
+          const r = FG.game.upSelect;
+          upDrag = null;
+          FG.game.upSelect = null;
+          if (r && FG.game.upMode === 'select') FG.game.previewUpgrade(r.x0, r.y0, r.x1, r.y1);
+        }
         // 蓝图框选完成：生成蓝图并进入放置预览（拖拽中途退出模式则放弃）
         if (bpDrag) {
           const r = FG.game.bpSelect;
@@ -132,6 +153,7 @@
 
     canvas.addEventListener('contextmenu', (e) => {
       e.preventDefault();
+      if (FG.game.upMode) { FG.game.cancelUpgradePreview(); return; }
       if (FG.game.bpMode) { FG.game.exitBlueprintMode(); return; }
       if (FG.game.ghost) FG.game.cancelGhost();
     });
@@ -157,6 +179,7 @@
       if (e.key === 'Escape') {
         if (modalOpen) { FG.Modals.closeAll(); return; }
         if (techOpen) { FG.Tech.close(); return; }
+        if (game.upMode) { game.cancelUpgradePreview(); return; }
         if (game.bpMode) { game.exitBlueprintMode(); return; }
         if (game.ghost) { game.cancelGhost(); return; }
         game.selection = null;
@@ -173,6 +196,9 @@
                    && (game.selection.def.beltTier !== undefined || game.selection.def.inserterTier !== undefined)) {
             game.selection.dir = (game.selection.dir + 1) % 4;
           }
+          break;
+        case 'u': case 'U':
+          game.toggleUpgradeMode();
           break;
         case 'f': case 'F':
           if (game.bpMode === 'place' && game.pipelineId) game.refindPipelineAnchor();

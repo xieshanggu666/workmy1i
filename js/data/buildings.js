@@ -147,6 +147,27 @@ FG.Buildings = (() => {
   const list = () => Object.values(DEFS);
   const byCat = (cat) => Object.values(DEFS).filter(b => b.cat === cat);
 
+  /**
+   * 原地升级链：低级建筑 → 可替换的高级建筑（同格替换，保留配方/库存/在途物料）。
+   * 仅收录「同格同向、功能直线增强」的型号；长臂机械臂（range 2）属旁系不在链上。
+   */
+  const UPGRADE_CHAIN = {
+    furnace: ['steelFurnace'],
+    assembler: ['assembler2'],
+    belt: ['fastBelt', 'expressBelt'],
+    fastBelt: ['expressBelt'],
+    inserter: ['fastInserter'],
+  };
+
+  /** 该建筑已解锁的最高级替换型号（无链或高级型号未解锁时返回 null） */
+  const upgradeTarget = (id, isUnlocked) => {
+    const chain = UPGRADE_CHAIN[id];
+    if (!chain) return null;
+    let best = null;
+    for (const t of chain) if (isUnlocked(t)) best = t;
+    return best;
+  };
+
   const CATS = [
     { id: 'extraction', name: '采集' },
     { id: 'production', name: '生产' },
@@ -154,5 +175,5 @@ FG.Buildings = (() => {
     { id: 'science',    name: '科研' },
   ];
 
-  return { DEFS, byId, costOf, list, byCat, CATS };
+  return { DEFS, byId, costOf, list, byCat, CATS, UPGRADE_CHAIN, upgradeTarget };
 })();

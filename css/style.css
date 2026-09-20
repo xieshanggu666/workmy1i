@@ -448,6 +448,10 @@ button.danger:hover { background: #4d2c2c; }
 .plan-st.st-waiting { color: var(--orange); border: 1px solid var(--orange); }
 .plan-st.st-blocked { color: #b08cff; border: 1px solid #b08cff; }
 .plan-st.st-paused { color: var(--text-dim); border: 1px solid var(--text-dim); }
+.up-badge {
+  font-size: 9px; padding: 0 5px; border-radius: 8px; margin-right: 4px;
+  color: #0e1420; background: #e8be3d; font-weight: 700; vertical-align: 1px;
+}
 .plan-prio { margin-top: 6px; }
 .plan-prio .prio-btn { padding: 3px 4px; font-size: 11px; }
 .dep-row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 5px; }
